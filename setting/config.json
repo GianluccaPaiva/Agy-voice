@@ -1,0 +1,10 @@
+{
+    "tipo_de_voz": "Antônio (PT-BR Masculino)",
+    "transparencia": 1.0,
+    "ultimo_estado": "standby",
+    "fixar_no_topo": false,
+    "painel_transcricao_aberto": true,
+    "cor_acordado": "#3b82f6",
+    "cor_standby": "#ff0700",
+    "modelo_whisper": "Small (Alta Precisão • ~480 MB)"
+}
