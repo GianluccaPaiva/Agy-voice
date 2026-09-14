@@ -277,7 +277,7 @@ class VoiceController:
                 # Síntese e Fala com suporte a Barge-in
                 # ----------------------------------------------------
                 self.bus.publish(StateChangedEvent(AppState.SPEAKING))
-                interrompido, chunks = await self.tts.falar(resposta, permitir_interrupcao=True)
+                interrompido, chunks = await self.tts.falar(resposta, permitir_interrupcao=self.em_conversa)
                 if interrompido:
                     frames_interrupcao = chunks
                     falando_inicial = True
