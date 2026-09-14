@@ -2,7 +2,7 @@
     "tipo_de_voz": "Antônio (PT-BR Masculino)",
     "transparencia": 0.99,
     "ultimo_estado": "standby",
-    "fixar_no_topo": true,
+    "fixar_no_topo": false,
     "painel_transcricao_aberto": false,
     "cor_acordado": "#3b82f6",
     "cor_standby": "#ff0700",

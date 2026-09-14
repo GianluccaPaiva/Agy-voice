@@ -109,7 +109,7 @@ class MainWindow(ctk.CTk):
 
         self.lbl_badge = ctk.CTkLabel(
             self.frame_orb_view,
-            text="● 100% IN-RAM  •  ZERO DISK I/O",
+            text="By Gianlucca Paiva",
             font=ctk.CTkFont(family="JetBrains Mono", size=10, weight="bold"),
             text_color="#06b6d4"
         )
