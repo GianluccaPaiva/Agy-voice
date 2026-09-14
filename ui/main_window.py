@@ -10,7 +10,9 @@ from core.events import (
     VolumeLevelEvent,
     VADStatusEvent,
     ChatMessageEvent,
-    ModelLoadProgressEvent
+    ModelLoadProgressEvent,
+    PermissionRequestEvent,
+    PermissionResponseEvent
 )
 from core.event_bus import EventBus
 from engine.voice_controller import VoiceController
@@ -31,6 +33,7 @@ class MainWindow(ctk.CTk):
 
         self.em_modo_configuracoes = False
         self.current_state = AppState.LISTENING if self.config.ultimo_estado == "acordado" else AppState.STANDBY
+        self.current_permission_req_id = ""
 
         self._configurar_janela()
         self._criar_layout()
@@ -137,6 +140,17 @@ class MainWindow(ctk.CTk):
         )
         self.lbl_vad_status.pack(pady=(0, 6))
 
+        # Mini Banner de Permissão Rápida (para quando em WAITING_PERMISSION)
+        self.frame_quick_perm = ctk.CTkFrame(self.frame_orb_view, fg_color="#1e1b4b", corner_radius=10, border_width=1, border_color="#f59e0b")
+        self.lbl_quick_perm = ctk.CTkLabel(self.frame_quick_perm, text="⚠️ Autorização Requerida", font=ctk.CTkFont(size=11, weight="bold"), text_color="#fbbf24")
+        self.lbl_quick_perm.pack(pady=(4, 2), padx=8)
+        self.frame_quick_btns = ctk.CTkFrame(self.frame_quick_perm, fg_color="transparent")
+        self.frame_quick_btns.pack(fill="x", padx=6, pady=(0, 4))
+        self.btn_q_yes = ctk.CTkButton(self.frame_quick_btns, text="✔ Sim", fg_color="#10b981", hover_color="#059669", height=24, font=ctk.CTkFont(size=11, weight="bold"), command=lambda: self._on_permission_response(self.current_permission_req_id, True))
+        self.btn_q_yes.pack(side="left", fill="x", expand=True, padx=2)
+        self.btn_q_no = ctk.CTkButton(self.frame_quick_btns, text="✖ Não", fg_color="#ef4444", hover_color="#dc2626", height=24, font=ctk.CTkFont(size=11, weight="bold"), command=lambda: self._on_permission_response(self.current_permission_req_id, False))
+        self.btn_q_no.pack(side="right", fill="x", expand=True, padx=2)
+
         # Seletor de Voz
         self.frame_voz = ctk.CTkFrame(self.frame_orb_view, fg_color="transparent")
         self.frame_voz.pack(fill="x", padx=20, pady=3)
@@ -208,7 +222,7 @@ class MainWindow(ctk.CTk):
         # ----------------------------------------------------
         # PAINEL DIREITO (FEED DE CONVERSA)
         # ----------------------------------------------------
-        self.chat_feed = ChatFeedComponent(self)
+        self.chat_feed = ChatFeedComponent(self, on_permission_response=self._on_permission_response)
         if self.config.painel_transcricao_aberto:
             self.chat_feed.grid(row=0, column=1, padx=(0, 16), pady=16, sticky="nsew")
         else:
@@ -222,11 +236,17 @@ class MainWindow(ctk.CTk):
         self.bus.subscribe(VADStatusEvent, lambda e: self.after(0, self._on_vad_status, e))
         self.bus.subscribe(ChatMessageEvent, lambda e: self.after(0, self._on_chat_message, e))
         self.bus.subscribe(ModelLoadProgressEvent, lambda e: self.after(0, self._on_model_progress, e))
+        self.bus.subscribe(PermissionRequestEvent, lambda e: self.after(0, self._on_permission_request, e))
 
     def _on_state_changed(self, event: StateChangedEvent):
         self.current_state = event.new_state
         self.orb_canvas.set_state(event.new_state)
         self._atualizar_visual_estado(event.new_state)
+        
+        if event.new_state != AppState.WAITING_PERMISSION:
+            self.chat_feed.esconder_solicitacao_permissao()
+            self.frame_quick_perm.pack_forget()
+
         self.config.ultimo_estado = "acordado" if self.controller.em_conversa else "standby"
         ConfigManager.salvar(self.config)
 
@@ -242,6 +262,19 @@ class MainWindow(ctk.CTk):
     def _on_model_progress(self, event: ModelLoadProgressEvent):
         self.chat_feed.adicionar_mensagem("system", event.message)
 
+    def _on_permission_request(self, event: PermissionRequestEvent):
+        self.current_permission_req_id = event.request_id
+        self.chat_feed.mostrar_solicitacao_permissao(event.request_id, event.description, event.details)
+        self.frame_quick_perm.pack(fill="x", padx=20, pady=(0, 4))
+        # Se a janela estiver minimizada, restaura para o usuário ver
+        if self.state() == "iconic" or not self.winfo_viewable():
+            self.restaurar_janela()
+
+    def _on_permission_response(self, req_id: str, approved: bool):
+        if req_id:
+            self.bus.publish(PermissionResponseEvent(request_id=req_id, approved=approved))
+            self.frame_quick_perm.pack_forget()
+
     def _atualizar_visual_estado(self, state: AppState):
         hover_acordado = ajustar_saturacao_cor(self.config.cor_acordado)
         hover_standby = ajustar_saturacao_cor(self.config.cor_standby)
@@ -255,6 +288,9 @@ class MainWindow(ctk.CTk):
         elif state == AppState.THINKING:
             self.lbl_state_title.configure(text="Processando no agy... 🧠", text_color="#f59e0b")
             self.btn_toggle_standby.configure(text="Colocar em Standby 💤", fg_color=self.config.cor_standby, hover_color=hover_standby)
+        elif state == AppState.WAITING_PERMISSION:
+            self.lbl_state_title.configure(text="Aguardando Autorização ⚠️", text_color="#fbbf24")
+            self.btn_toggle_standby.configure(text="Aguardando Autorização ⚠️", fg_color="#d97706", hover_color="#b45309")
         elif state == AppState.SPEAKING:
             self.lbl_state_title.configure(text="Falando resposta... 🔊", text_color="#10b981")
             self.btn_toggle_standby.configure(text="Colocar em Standby 💤", fg_color=self.config.cor_standby, hover_color=hover_standby)

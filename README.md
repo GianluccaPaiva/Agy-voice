@@ -68,6 +68,7 @@ pip install -r requirements.txt
 ### 🖥️ Opção 1: Hub Visual Nativo para Desktop (Recomendado)
 Um aplicativo de desktop moderno com **Glowing Energy Orb**, feed de chat e controles:
 * **🎙️ Seletor de Qualidade Whisper (STT)**: Escolha a precisão da transcrição em tempo real (`Tiny`, `Base`, `Small`, `Medium` ou `Turbo`) com troca a quente em memória RAM.
+* **🛡️ Interceptação de Permissões do AGY (Voz & UI)**: Quando o AGY solicita autorização para executar comandos de terminal (`run_command`) ou editar arquivos, o sistema intercepta, exibe um Card de Confirmação com botões `[ ✔ Sim / Aceitar ]` e `[ ✖ Não / Recusar ]`, e pergunta por voz. O usuário pode autorizar dizendo *"Yes"*, *"Sim"*, *"Autorizo"*, *"Pode executar"* ou clicando na tela.
 * **🎨 Círculo de Cores Interativo**: Personalize livremente as cores do Orb tanto para o modo **⚡ Acordado** quanto para o modo **💤 Standby** usando o círculo cromático HSV suave, paletas de clique rápido ou seletor avançado.
 * **📁 Configurações Fixas em `setting/`**: Todas as preferências (qualidade whisper, voz, opacidade, cores, fixação no topo e último estado) são salvas automaticamente em [`setting/config.json`](file:///C:/Users/gianl/agy-voice-frontend/setting/config.json).
 * **⚙ Botão de Configurações**: Ajuste a **Transparência / Opacidade** da janela em tempo real (de 35% a 100%) e ative **"Fixar Sempre no Topo"**.
@@ -76,6 +77,7 @@ Um aplicativo de desktop moderno com **Glowing Energy Orb**, feed de chat e cont
 * **💬 Modo Compacto / Widget**: Recolha o feed de chat e deixe apenas o Orb compacto na tela.
 * **No PowerShell**: Execute [`.\run_hub.ps1`](file:///C:/Users/gianl/agy-voice-frontend/run_hub.ps1)
 * **No Windows Explorer / CMD**: Duplo clique em [`run_hub.bat`](file:///C:/Users/gianl/agy-voice-frontend/run_hub.bat) ou `python gui_hub.py`
+
 
 ---
 

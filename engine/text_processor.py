@@ -45,3 +45,26 @@ class TextProcessor:
                 resto = norm[match.end():].strip()
                 return True, resto
         return False, ""
+
+    @classmethod
+    def eh_confirmacao(cls, texto: str) -> bool:
+        """
+        Detecta respostas de confirmação / aceitação (ex: 'yes', 'sim', 'autorizo', 'aceito', 'pode executar', 'ok', etc.).
+        """
+        norm = cls.normalizar(texto)
+        padroes = [
+            r'\b(yes|yeah|yep|sim|claro|positivo|com certeza|autorizo|autorizar|autorizado|aceito|aceitar|aceita|permito|permitir|pode|pode ir|pode executar|pode rodar|pode fazer|manda bala|manda ver|bora|confirmo|confirmar|confirmado|ok|concordo|executa|executar|roda|rodar|vai)\b'
+        ]
+        return any(re.search(p, norm) for p in padroes)
+
+    @classmethod
+    def eh_negacao(cls, texto: str) -> bool:
+        """
+        Detecta respostas de negação / rejeição (ex: 'no', 'nao', 'cancela', 'recuso', 'nao autorizo', etc.).
+        """
+        norm = cls.normalizar(texto)
+        padroes = [
+            r'\b(no|nope|nao|negativo|cancela|cancelar|cancelado|recuso|recusar|recusado|nao autorizo|nao permitir|nao quero|deixa quieto|deixa pra la|abortar|aborta|para|parar|esquece)\b'
+        ]
+        return any(re.search(p, norm) for p in padroes)
+

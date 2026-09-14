@@ -27,3 +27,16 @@ class ModelLoadProgressEvent(BaseEvent):
     model_name: str
     is_loading: bool
     message: str
+
+@dataclass
+class PermissionRequestEvent(BaseEvent):
+    request_id: str
+    action_type: str
+    description: str
+    details: str
+
+@dataclass
+class PermissionResponseEvent(BaseEvent):
+    request_id: str
+    approved: bool
+

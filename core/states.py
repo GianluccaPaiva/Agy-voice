@@ -5,3 +5,5 @@ class AppState(str, Enum):
     LISTENING = "listening"
     THINKING = "thinking"
     SPEAKING = "speaking"
+    WAITING_PERMISSION = "waiting_permission"
+

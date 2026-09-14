@@ -53,10 +53,16 @@ class GlowingOrbCanvas(ctk.CTkCanvas):
                 base_r = 52 + math.sin(t * 8) * 5
                 cor_centro = "#f59e0b"
                 cor_anel = "#fbbf24"
+            elif self.current_state == AppState.WAITING_PERMISSION:
+                vol_boost = min(20, self.current_volume * 300)
+                base_r = 56 + math.sin(t * 10) * 7 + vol_boost
+                cor_centro = "#f59e0b"
+                cor_anel = "#ef4444"
             else:  # SPEAKING
                 base_r = 60 + math.sin(t * 6) * 9
                 cor_centro = "#10b981"
                 cor_anel = "#34d399"
+
 
             # Círculo externo difuso
             self.create_oval(
