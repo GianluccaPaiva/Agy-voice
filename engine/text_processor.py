@@ -32,12 +32,12 @@ class TextProcessor:
     @classmethod
     def extrair_wake_word(cls, texto: str) -> Tuple[bool, str]:
         """
-        Verifica se o texto contém a palavra de ativação 'AGY' (incluindo variações fonéticas como adaj, adai, adji, agi).
+        Verifica se o texto contém a palavra de ativação 'AGY' / 'Aday' (incluindo variações fonéticas como aday, adaj, adai, adei, adji, agi, a day).
         Retorna (True, comando_restante) ou (False, "").
         """
         norm = cls.normalizar(texto)
         padroes = [
-            r'\b(ei|hey|ola|oi|ok|e\s*ai)?\s*(agy|adaj|adai|adji|adje|adjy|adgi|adgy|ajai|adjai|adaji|agi|age|aggie|aje|aji|ajy|eigi|eiji|edge|edgy|a\s*g\s*y|antigravity)\b'
+            r'\b(ei|hey|ola|oi|ok|e\s*ai)?\s*(agy|aday|a\s*day|adaj|adai|a\s*dai|adey|a\s*dey|adei|a\s*dei|adhey|adaye|adayi|adji|adje|adjy|adgi|adgy|ajai|adjai|adaji|agi|age|aggie|aje|aji|ajy|eigi|eiji|edge|edgy|edey|edai|eday|edi|edy|eidei|eidi|eyji|aidy|aidei|aidi|aedy|aedi|a\s*g\s*y|a\s*g\s*i|ag\s*y|a\s*gy|antigravity)\b'
         ]
         for p in padroes:
             match = re.search(p, norm)

@@ -10,13 +10,13 @@ class AcousticPreFilter:
     def validar_presenca_voz(audio_array: np.ndarray, taxa: int = 16000) -> bool:
         if audio_array is None or len(audio_array) == 0:
             return False
-        # Descarta gravações com menos de 350ms
-        if len(audio_array) / taxa < 0.35:
+        # Descarta gravações com menos de 220ms (permite wake words curtas como 'AGY', 'Aday')
+        if len(audio_array) / taxa < 0.22:
             return False
         # Descarta se amplitude máxima ou RMS for ruído ambiente puro
         pico = float(np.max(np.abs(audio_array)))
         rms = float(np.sqrt(np.mean(audio_array ** 2)))
-        if pico < 0.035 or rms < 0.007:
+        if pico < 0.025 or rms < 0.005:
             return False
         return True
 
@@ -41,6 +41,12 @@ class AudioRecorderVAD:
         frames_iniciais: Optional[List[np.ndarray]] = None,
         falando_inicial: bool = False
     ) -> Optional[np.ndarray]:
+        if self.microfone_mutado:
+            if self.volume_callback:
+                self.volume_callback(0.0)
+            time.sleep(0.1)
+            return None
+
         chunk_size = int(taxa * 0.1)  # Chunks de 100ms
         frames = list(frames_iniciais) if frames_iniciais else []
         pre_buffer: List[np.ndarray] = []
@@ -51,13 +57,11 @@ class AudioRecorderVAD:
 
         with sd.InputStream(samplerate=taxa, channels=1, dtype='float32', blocksize=chunk_size) as stream:
             while self.executando:
-                if self.interromper:
+                if self.microfone_mutado or self.interromper:
                     self.interromper = False
+                    if self.volume_callback:
+                        self.volume_callback(0.0)
                     return None
-
-                if self.microfone_mutado:
-                    time.sleep(0.1)
-                    continue
 
                 data, _ = stream.read(chunk_size)
                 volume = float(np.sqrt(np.mean(data ** 2)))
@@ -86,6 +90,7 @@ class AudioRecorderVAD:
                     if tempo_silencio >= silencio_limite or tempo_total >= max_duracao:
                         break
 
-        if frames:
+        if frames and not self.microfone_mutado:
             return np.concatenate(frames, axis=0).flatten().astype(np.float32)
-        return np.zeros(taxa, dtype=np.float32)
+        return None
+

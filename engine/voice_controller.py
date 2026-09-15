@@ -77,9 +77,21 @@ class VoiceController:
             self.bus.publish(ChatMessageEvent("system", "💤 AGY colocado em standby pelo botão."))
 
     def alternar_mudo(self) -> bool:
-        """Alterna estado de mudo do microfone."""
+        """Alterna estado de mudo do microfone garantindo restauração perfeita dos parâmetros."""
         self.vad.microfone_mutado = not self.vad.microfone_mutado
+        if self.vad.microfone_mutado:
+            self.vad.interromper = True
+            self.bus.publish(VolumeLevelEvent(0.0))
+            self.bus.publish(VADStatusEvent("🔇 Microfone Mutado"))
+        else:
+            self.vad.interromper = False
+            if self.em_conversa:
+                self.bus.publish(VADStatusEvent("👂 Ouvindo microfone..."))
+            else:
+                self.bus.publish(VADStatusEvent("💤 Standby: Diga 'AGY'..."))
         return self.vad.microfone_mutado
+
+
 
     def trocar_voz(self, nova_voz: str) -> None:
         self.tts.voz_atual = nova_voz
@@ -123,8 +135,18 @@ class VoiceController:
         else:
             pergunta_fala = f"O AGY solicita permissão para {resultado_agy.action_description}. Você autoriza?"
 
+        if resultado_agy.response_text:
+            self.bus.publish(ChatMessageEvent("agy", resultado_agy.response_text))
+
+        # Transcreve a requisição de permissão no histórico de texto
+        msg_transcricao = f"⚠️ [Solicitação de Permissão]\n• Ação: {resultado_agy.action_description}"
+        if resultado_agy.action_details:
+            msg_transcricao += f"\n• Detalhes: {resultado_agy.action_details}"
+        msg_transcricao += "\n👉 Você autoriza?"
+        self.bus.publish(ChatMessageEvent("agy", msg_transcricao))
+
         self.bus.publish(StateChangedEvent(AppState.SPEAKING))
-        await self.tts.falar(pergunta_fala, permitir_interrupcao=True)
+        await self.tts.falar(pergunta_fala, permitir_interrupcao=(not self.vad.microfone_mutado))
 
         self.bus.publish(StateChangedEvent(AppState.WAITING_PERMISSION))
         self.bus.publish(VADStatusEvent("👂 Aguardando resposta: Diga 'Sim/Yes' ou 'Não'..."))
@@ -135,6 +157,11 @@ class VoiceController:
             if not self.fila_resposta_permissao.empty():
                 aprovado = self.fila_resposta_permissao.get_nowait()
                 break
+
+            # Se estiver mutado, não tenta gravar pelo microfone
+            if self.vad.microfone_mutado:
+                await asyncio.sleep(0.1)
+                continue
 
             # 2. Captura áudio do usuário respondendo por voz
             audio_array = self.vad.gravar(threshold=0.018, silencio_limite=0.8)
@@ -190,6 +217,11 @@ class VoiceController:
 
         while self.executando:
             try:
+                # Se mutado, fica em espera sem consumir CPU nem escutar
+                if self.vad.microfone_mutado:
+                    await asyncio.sleep(0.1)
+                    continue
+
                 # ----------------------------------------------------
                 # MODO 1: STANDBY / DORMINDO
                 # ----------------------------------------------------
@@ -277,7 +309,7 @@ class VoiceController:
                 # Síntese e Fala com suporte a Barge-in
                 # ----------------------------------------------------
                 self.bus.publish(StateChangedEvent(AppState.SPEAKING))
-                interrompido, chunks = await self.tts.falar(resposta, permitir_interrupcao=self.em_conversa)
+                interrompido, chunks = await self.tts.falar(resposta, permitir_interrupcao=(self.em_conversa and not self.vad.microfone_mutado))
                 if interrompido:
                     frames_interrupcao = chunks
                     falando_inicial = True
@@ -285,3 +317,4 @@ class VoiceController:
             except Exception as e:
                 print(f"⚠️ Erro no loop de voz: {e}")
                 await asyncio.sleep(1)
+

@@ -49,6 +49,6 @@ class FasterWhisperSTT:
                 beam_size=beam,
                 best_of=1 if modo_rapido else 2,
                 without_timestamps=True,
-                initial_prompt="AGY, agy, adaj, adai, Antigravity, sair da conversa."
+                initial_prompt="AGY, agy, Aday, aday, adaj, adai, adei, a day, Antigravity, assistente de voz, sair da conversa."
             )
             return " ".join([s.text for s in segmentos]).strip()
