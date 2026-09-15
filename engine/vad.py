@@ -44,7 +44,7 @@ class AudioRecorderVAD:
         if self.microfone_mutado:
             if self.volume_callback:
                 self.volume_callback(0.0)
-            time.sleep(0.1)
+            time.sleep(0.05)
             return None
 
         chunk_size = int(taxa * 0.1)  # Chunks de 100ms
@@ -64,6 +64,12 @@ class AudioRecorderVAD:
                     return None
 
                 data, _ = stream.read(chunk_size)
+
+                if self.microfone_mutado:
+                    if self.volume_callback:
+                        self.volume_callback(0.0)
+                    return None
+
                 volume = float(np.sqrt(np.mean(data ** 2)))
                 tempo_total += 0.1
 

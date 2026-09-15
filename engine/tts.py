@@ -59,27 +59,21 @@ class EdgeTTSEngine:
             print(f"⚠️ Erro ao sintetizar sentença TTS ('{texto_sentenca[:30]}...'): {e}")
             return None
 
-    async def falar(
+    async def falar_fila_sentencas(
         self,
-        texto: str,
+        fila_sentencas: asyncio.Queue[Optional[str]],
         permitir_interrupcao: bool = True,
         threshold_interrupcao: float = 0.016,
-        volume_callback: Optional[Callable[[float], None]] = None
+        volume_callback: Optional[Callable[[float], None]] = None,
+        is_muted: Optional[Callable[[], bool]] = None
     ) -> Tuple[bool, Optional[np.ndarray]]:
         """
-        Sintetiza e reproduz o texto frase por frase em pipeline dinâmico.
-        Durante TODO o processo (síntese inicial, pausas e reprodução), o microfone é monitorado.
-        Ao detectar voz humana (Barge-in):
-          1. Interrompe imediatamente o áudio e a síntese ("breca").
-          2. Grava continuamente a nova fala do usuário até o silêncio.
-          3. Retorna o array de áudio completo pronto para transcrição imediata.
+        Sintetiza e reproduz sentenças conforme chegam da fila em streaming paralelo.
+        Monitora microfone em tempo real com interrupção instantânea (Barge-in).
+        Garante respeito absoluto ao estado de mudo.
         """
-        if not texto or not texto.strip():
-            return False, None
-
-        sentencas = self._dividir_em_sentencas(texto)
-        if not sentencas:
-            return False, None
+        if is_muted and is_muted():
+            permitir_interrupcao = False
 
         fila_audio: asyncio.Queue[Optional[io.BytesIO]] = asyncio.Queue(maxsize=10)
         tarefa_produtor: Optional[asyncio.Task] = None
@@ -87,14 +81,20 @@ class EdgeTTSEngine:
 
         async def produtor():
             try:
-                for sentenca in sentencas:
-                    if evento_parar_produtor.is_set():
+                while not evento_parar_produtor.is_set():
+                    sentenca = await fila_sentencas.get()
+                    if sentenca is None or evento_parar_produtor.is_set():
                         break
-                    buf = await self._sintetizar_para_buffer(sentenca)
-                    if evento_parar_produtor.is_set():
-                        break
-                    if buf is not None:
-                        await fila_audio.put(buf)
+                    
+                    subpartes = self._dividir_em_sentencas(sentenca)
+                    for sp in subpartes:
+                        if evento_parar_produtor.is_set():
+                            break
+                        buf = await self._sintetizar_para_buffer(sp)
+                        if evento_parar_produtor.is_set():
+                            break
+                        if buf is not None:
+                            await fila_audio.put(buf)
             except asyncio.CancelledError:
                 pass
             except Exception as ex:
@@ -145,7 +145,19 @@ class EdgeTTSEngine:
             try:
                 with sd.InputStream(samplerate=taxa, channels=1, dtype='float32', blocksize=chunk_size) as mic_stream:
                     while not parar_mic.is_set():
+                        if is_muted and is_muted():
+                            if volume_callback:
+                                volume_callback(0.0)
+                            time.sleep(0.1)
+                            continue
+
                         data, _ = mic_stream.read(chunk_size)
+
+                        if is_muted and is_muted():
+                            if volume_callback:
+                                volume_callback(0.0)
+                            continue
+
                         vol = float(np.sqrt(np.mean(data ** 2)))
 
                         if volume_callback:
@@ -157,7 +169,6 @@ class EdgeTTSEngine:
                                 pre_buffer.pop(0)
 
                             if vol > threshold_interrupcao:
-                                # Breca a reprodução do Pygame no mesmo instante
                                 pygame.mixer.music.stop()
                                 voz_detectada.set()
                                 gravando_interrupcao = True
@@ -205,18 +216,17 @@ class EdgeTTSEngine:
 
                 pygame.mixer.music.unload()
 
-            if voz_detectada.is_set():
+            if voz_detectada.is_set() and not (is_muted and is_muted()):
                 evento_parar_produtor.set()
                 if tarefa_produtor and not tarefa_produtor.done():
                     tarefa_produtor.cancel()
 
-                # Aguarda o usuário concluir o comando falado
                 await asyncio.to_thread(mic_thread.join, timeout=10.0)
 
-                if chunks_interrupcao:
+                if chunks_interrupcao and not (is_muted and is_muted()):
                     audio_final = np.concatenate(chunks_interrupcao, axis=0).flatten().astype(np.float32)
                     return True, audio_final
-                return True, None
+                return False, None
             else:
                 parar_mic.set()
                 await asyncio.to_thread(mic_thread.join, timeout=1.0)
@@ -235,5 +245,34 @@ class EdgeTTSEngine:
                     await tarefa_produtor
                 except asyncio.CancelledError:
                     pass
+
+    async def falar(
+        self,
+        texto: str,
+        permitir_interrupcao: bool = True,
+        threshold_interrupcao: float = 0.016,
+        volume_callback: Optional[Callable[[float], None]] = None,
+        is_muted: Optional[Callable[[], bool]] = None
+    ) -> Tuple[bool, Optional[np.ndarray]]:
+        """Sintetiza e reproduz um texto completo."""
+        if not texto or not texto.strip():
+            return False, None
+
+        sentencas = self._dividir_em_sentencas(texto)
+        if not sentencas:
+            return False, None
+
+        fila: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        for s in sentencas:
+            fila.put_nowait(s)
+        fila.put_nowait(None)
+
+        return await self.falar_fila_sentencas(
+            fila_sentencas=fila,
+            permitir_interrupcao=permitir_interrupcao,
+            threshold_interrupcao=threshold_interrupcao,
+            volume_callback=volume_callback,
+            is_muted=is_muted
+        )
 
 

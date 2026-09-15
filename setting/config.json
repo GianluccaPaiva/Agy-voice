@@ -3,7 +3,7 @@
     "transparencia": 1.0,
     "ultimo_estado": "standby",
     "fixar_no_topo": true,
-    "painel_transcricao_aberto": false,
+    "painel_transcricao_aberto": true,
     "cor_acordado": "#3b82f6",
     "cor_standby": "#ff0700",
     "modelo_whisper": "Medium (Estúdio • ~1.5 GB)"
