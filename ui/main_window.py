@@ -279,21 +279,28 @@ class MainWindow(ctk.CTk):
         hover_acordado = ajustar_saturacao_cor(self.config.cor_acordado)
         hover_standby = ajustar_saturacao_cor(self.config.cor_standby)
 
-        if state == AppState.STANDBY:
+        if self.controller.vad.microfone_mutado:
+            self.lbl_vad_status.configure(text="🔇 Microfone Mutado")
+        elif state == AppState.STANDBY:
             self.lbl_state_title.configure(text="Modo Standby 💤", text_color=self.config.cor_standby)
             self.btn_toggle_standby.configure(text="Acordar AGY ⚡", fg_color=self.config.cor_acordado, hover_color=hover_acordado)
+            self.lbl_vad_status.configure(text="💤 Standby: Diga 'AGY'...")
         elif state == AppState.LISTENING:
             self.lbl_state_title.configure(text="Ouvindo você... 🎤", text_color=self.config.cor_acordado)
             self.btn_toggle_standby.configure(text="Colocar em Standby 💤", fg_color=self.config.cor_standby, hover_color=hover_standby)
+            self.lbl_vad_status.configure(text="👂 Ouvindo microfone...")
         elif state == AppState.THINKING:
             self.lbl_state_title.configure(text="Processando no agy... 🧠", text_color="#f59e0b")
             self.btn_toggle_standby.configure(text="Colocar em Standby 💤", fg_color=self.config.cor_standby, hover_color=hover_standby)
+            self.lbl_vad_status.configure(text="🧠 Processando no agy...")
         elif state == AppState.WAITING_PERMISSION:
             self.lbl_state_title.configure(text="Aguardando Autorização ⚠️", text_color="#fbbf24")
             self.btn_toggle_standby.configure(text="Aguardando Autorização ⚠️", fg_color="#d97706", hover_color="#b45309")
+            self.lbl_vad_status.configure(text="⚠️ Aguardando autorização: Diga 'Sim/Yes' ou clique")
         elif state == AppState.SPEAKING:
             self.lbl_state_title.configure(text="Falando resposta... 🔊", text_color="#10b981")
             self.btn_toggle_standby.configure(text="Colocar em Standby 💤", fg_color=self.config.cor_standby, hover_color=hover_standby)
+            self.lbl_vad_status.configure(text="🔊 Falando resposta (interrompa a qualquer momento)...")
 
     def alternar_modo_configuracoes(self):
         self.em_modo_configuracoes = not self.em_modo_configuracoes

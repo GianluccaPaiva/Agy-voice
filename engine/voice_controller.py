@@ -1,3 +1,4 @@
+import re
 import asyncio
 import uuid
 import numpy as np
@@ -146,12 +147,29 @@ class VoiceController:
         self.bus.publish(ChatMessageEvent("agy", msg_transcricao))
 
         self.bus.publish(StateChangedEvent(AppState.SPEAKING))
-        await self.tts.falar(pergunta_fala, permitir_interrupcao=(not self.vad.microfone_mutado))
+        interrompido, audio_interrupcao = await self.tts.falar(
+            pergunta_fala,
+            permitir_interrupcao=(not self.vad.microfone_mutado),
+            volume_callback=lambda v: self.bus.publish(VolumeLevelEvent(v))
+        )
 
         self.bus.publish(StateChangedEvent(AppState.WAITING_PERMISSION))
         self.bus.publish(VADStatusEvent("👂 Aguardando resposta: Diga 'Sim/Yes' ou 'Não'..."))
 
         aprovado: Optional[bool] = None
+
+        # Se o usuário já respondeu interrompendo o áudio da pergunta
+        if interrompido and audio_interrupcao is not None and AcousticPreFilter.validar_presenca_voz(audio_interrupcao):
+            texto_resposta = self.stt.transcrever(audio_interrupcao, modo_rapido=True)
+            if texto_resposta:
+                print(f"[Voz capturada por interrupção para permissão]: '{texto_resposta}'")
+                if TextProcessor.eh_confirmacao(texto_resposta):
+                    aprovado = True
+                    self.bus.publish(ChatMessageEvent("user", f"✔ \"{texto_resposta}\" (Autorizado por voz)"))
+                elif TextProcessor.eh_negacao(texto_resposta):
+                    aprovado = False
+                    self.bus.publish(ChatMessageEvent("user", f"✖ \"{texto_resposta}\" (Recusado por voz)"))
+
         while self.executando and aprovado is None:
             # 1. Verifica se houve clique em botão da UI
             if not self.fila_resposta_permissao.empty():
@@ -212,8 +230,7 @@ class VoiceController:
 
     async def executar_loop(self) -> None:
         """Loop principal do assistente de voz."""
-        frames_interrupcao: Optional[List[np.ndarray]] = None
-        falando_inicial: bool = False
+        audio_pendente: Optional[np.ndarray] = None
 
         while self.executando:
             try:
@@ -222,77 +239,96 @@ class VoiceController:
                     await asyncio.sleep(0.1)
                     continue
 
-                # ----------------------------------------------------
-                # MODO 1: STANDBY / DORMINDO
-                # ----------------------------------------------------
-                if not self.em_conversa:
-                    self.bus.publish(StateChangedEvent(AppState.STANDBY))
-                    self.bus.publish(VADStatusEvent("💤 Standby: Diga 'AGY'..."))
-                    
-                    audio_array = self.vad.gravar(threshold=0.018, silencio_limite=1.0)
-                    if not self.executando or audio_array is None:
-                        continue
-
-                    if not AcousticPreFilter.validar_presenca_voz(audio_array):
-                        continue
-
-                    texto = self.stt.transcrever(audio_array, modo_rapido=True)
-                    if not texto:
-                        continue
-
-                    print(f"[Standby escutou]: '{texto}'")
-                    acordou, extra = TextProcessor.extrair_wake_word(texto)
-
-                    if acordou:
-                        self.em_conversa = True
-                        self.primeira_vez = True
-                        self.bus.publish(StateChangedEvent(AppState.LISTENING))
-                        self.bus.publish(ChatMessageEvent("user", f"⚡ Wake Word detectada: \"{texto}\""))
-
-                        if extra:
-                            texto_usuario = extra
-                        else:
-                            await self.tts.falar("Estou ouvindo. Como posso ajudar?", permitir_interrupcao=False)
-                            continue
-                    else:
-                        continue
+                # Se já temos áudio proveniente de uma interrupção anterior
+                if audio_pendente is not None:
+                    audio_array = audio_pendente
+                    audio_pendente = None
                 else:
                     # ----------------------------------------------------
-                    # MODO 2: ATIVO / EM CONVERSA
+                    # MODO 1: STANDBY / DORMINDO
                     # ----------------------------------------------------
-                    self.bus.publish(StateChangedEvent(AppState.LISTENING))
-                    self.bus.publish(VADStatusEvent("👂 Ouvindo microfone..."))
+                    if not self.em_conversa:
+                        self.bus.publish(StateChangedEvent(AppState.STANDBY))
+                        self.bus.publish(VADStatusEvent("💤 Standby: Diga 'AGY'..."))
+                        
+                        audio_array = self.vad.gravar(threshold=0.016, silencio_limite=1.0)
+                        if not self.executando or audio_array is None:
+                            continue
 
-                    audio_array = self.vad.gravar(
-                        frames_iniciais=frames_interrupcao,
-                        falando_inicial=falando_inicial
-                    )
-                    frames_interrupcao = None
-                    falando_inicial = False
+                        if not AcousticPreFilter.validar_presenca_voz(audio_array):
+                            continue
 
-                    if not self.executando or audio_array is None:
+                        texto = self.stt.transcrever(audio_array, modo_rapido=True)
+                        if not texto:
+                            continue
+
+                        print(f"[Standby escutou]: '{texto}'")
+                        acordou, extra = TextProcessor.extrair_wake_word(texto)
+
+                        if acordou:
+                            self.em_conversa = True
+                            self.primeira_vez = True
+                            self.bus.publish(StateChangedEvent(AppState.LISTENING))
+                            self.bus.publish(ChatMessageEvent("user", f"⚡ Wake Word detectada: \"{texto}\""))
+
+                            if extra:
+                                texto_usuario = extra
+                            else:
+                                await self.tts.falar("Estou ouvindo. Como posso ajudar?", permitir_interrupcao=False)
+                                continue
+                        else:
+                            continue
+                    else:
+                        # ----------------------------------------------------
+                        # MODO 2: ATIVO / EM CONVERSA
+                        # ----------------------------------------------------
+                        self.bus.publish(StateChangedEvent(AppState.LISTENING))
+                        self.bus.publish(VADStatusEvent("👂 Ouvindo microfone..."))
+
+                        audio_array = self.vad.gravar()
+                        if not self.executando or audio_array is None:
+                            continue
+
+                    if not AcousticPreFilter.validar_presenca_voz(audio_array):
                         continue
 
                     texto_usuario = self.stt.transcrever(audio_array)
                     if not texto_usuario:
                         continue
 
-                    self.bus.publish(ChatMessageEvent("user", texto_usuario))
+                self.bus.publish(ChatMessageEvent("user", texto_usuario))
 
-                    # Verifica saída da conversa
-                    if TextProcessor.eh_comando_saida(texto_usuario):
-                        self.em_conversa = False
-                        self.primeira_vez = True
-                        self.bus.publish(StateChangedEvent(AppState.STANDBY))
-                        self.bus.publish(ChatMessageEvent("agy", "Conversa encerrada. Diga AGY quando quiser voltar."))
-                        await self.tts.falar("Conversa encerrada. Diga AGY quando quiser falar comigo novamente.", permitir_interrupcao=False)
-                        continue
+                # Verifica saída da conversa
+                if TextProcessor.eh_comando_saida(texto_usuario):
+                    self.em_conversa = False
+                    self.primeira_vez = True
+                    self.bus.publish(StateChangedEvent(AppState.STANDBY))
+                    self.bus.publish(ChatMessageEvent("agy", "Conversa encerrada. Diga AGY quando quiser voltar."))
+                    await self.tts.falar("Conversa encerrada. Diga AGY quando quiser falar comigo novamente.", permitir_interrupcao=False)
+                    continue
+
+                # Se o usuário disse apenas para parar ou silenciar
+                norm_cmd = TextProcessor.normalizar(texto_usuario)
+                if re.search(r'^(para|parar|quieto|silencio|cancela|cancelar|chega|stop|calado|pausa|pausar|espera)$', norm_cmd):
+                    self.bus.publish(ChatMessageEvent("agy", "Parado. O que deseja?"))
+                    continue
+
+                # Limpa wake word inicial caso o usuário tenha dito "AGY <comando>" em conversa ativa
+                acordou, extra = TextProcessor.extrair_wake_word(texto_usuario)
+                if acordou and extra:
+                    texto_envio = extra
+                elif acordou and not extra:
+                    await self.tts.falar("Estou ouvindo. O que deseja?", permitir_interrupcao=(not self.vad.microfone_mutado))
+                    continue
+                else:
+                    texto_envio = texto_usuario
 
                 # ----------------------------------------------------
                 # Processamento com o agy CLI
                 # ----------------------------------------------------
                 self.bus.publish(StateChangedEvent(AppState.THINKING))
-                resultado_agy = await self.bridge.executar(texto_usuario, primeira_interacao=self.primeira_vez)
+                self.bus.publish(VADStatusEvent("🧠 Processando no agy..."))
+                resultado_agy = await self.bridge.executar(texto_envio, primeira_interacao=self.primeira_vez)
                 self.primeira_vez = False
 
                 if resultado_agy.requer_permissao:
@@ -306,13 +342,37 @@ class VoiceController:
                 self.bus.publish(ChatMessageEvent("agy", resposta))
 
                 # ----------------------------------------------------
-                # Síntese e Fala com suporte a Barge-in
+                # Síntese e Fala com suporte a Barge-in em tempo real
                 # ----------------------------------------------------
                 self.bus.publish(StateChangedEvent(AppState.SPEAKING))
-                interrompido, chunks = await self.tts.falar(resposta, permitir_interrupcao=(self.em_conversa and not self.vad.microfone_mutado))
+                self.bus.publish(VADStatusEvent("🔊 Falando resposta..."))
+                interrompido, audio_interrupcao = await self.tts.falar(
+                    resposta,
+                    permitir_interrupcao=(self.em_conversa and not self.vad.microfone_mutado),
+                    threshold_interrupcao=0.016,
+                    volume_callback=lambda v: self.bus.publish(VolumeLevelEvent(v))
+                )
+
                 if interrompido:
-                    frames_interrupcao = chunks
-                    falando_inicial = True
+                    self.bus.publish(VADStatusEvent("⚡ Fala interrompida!"))
+                    if audio_interrupcao is not None and AcousticPreFilter.validar_presenca_voz(audio_interrupcao):
+                        texto_interrompido = self.stt.transcrever(audio_interrupcao)
+                        if texto_interrompido:
+                            print(f"[Interrupção transcrita]: '{texto_interrompido}'")
+                            texto_usuario = texto_interrompido
+                            audio_pendente = audio_interrupcao
+                            # O loop reiniciará com audio_pendente imediatamente
+                    else:
+                        if self.em_conversa:
+                            self.bus.publish(StateChangedEvent(AppState.LISTENING))
+                            self.bus.publish(VADStatusEvent("👂 Ouvindo microfone..."))
+                else:
+                    if self.em_conversa:
+                        self.bus.publish(StateChangedEvent(AppState.LISTENING))
+                        self.bus.publish(VADStatusEvent("👂 Ouvindo microfone..."))
+                    else:
+                        self.bus.publish(StateChangedEvent(AppState.STANDBY))
+                        self.bus.publish(VADStatusEvent("💤 Standby: Diga 'AGY'..."))
 
             except Exception as e:
                 print(f"⚠️ Erro no loop de voz: {e}")

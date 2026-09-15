@@ -1,7 +1,8 @@
 import io
 import re
 import asyncio
-from typing import Tuple, Optional, List
+import threading
+from typing import Tuple, Optional, List, Callable
 import numpy as np
 import pygame
 import sounddevice as sd
@@ -62,12 +63,16 @@ class EdgeTTSEngine:
         self,
         texto: str,
         permitir_interrupcao: bool = True,
-        threshold_interrupcao: float = 0.018
-    ) -> Tuple[bool, Optional[List[np.ndarray]]]:
+        threshold_interrupcao: float = 0.016,
+        volume_callback: Optional[Callable[[float], None]] = None
+    ) -> Tuple[bool, Optional[np.ndarray]]:
         """
-        Sintetiza e reproduz o texto frase por frase em pipeline (Producer-Consumer).
-        Inicia a reprodução da 1ª frase enquanto as frases seguintes são sintetizadas em background.
-        Suporta interrupção imediata por voz (Barge-in) com sensibilidade calibrada.
+        Sintetiza e reproduz o texto frase por frase em pipeline dinâmico.
+        Durante TODO o processo (síntese inicial, pausas e reprodução), o microfone é monitorado.
+        Ao detectar voz humana (Barge-in):
+          1. Interrompe imediatamente o áudio e a síntese ("breca").
+          2. Grava continuamente a nova fala do usuário até o silêncio.
+          3. Retorna o array de áudio completo pronto para transcrição imediata.
         """
         if not texto or not texto.strip():
             return False, None
@@ -78,13 +83,16 @@ class EdgeTTSEngine:
 
         fila_audio: asyncio.Queue[Optional[io.BytesIO]] = asyncio.Queue(maxsize=10)
         tarefa_produtor: Optional[asyncio.Task] = None
-        interrompido = False
-        chunks_voz: List[np.ndarray] = []
+        evento_parar_produtor = asyncio.Event()
 
         async def produtor():
             try:
                 for sentenca in sentencas:
+                    if evento_parar_produtor.is_set():
+                        break
                     buf = await self._sintetizar_para_buffer(sentenca)
+                    if evento_parar_produtor.is_set():
+                        break
                     if buf is not None:
                         await fila_audio.put(buf)
             except asyncio.CancelledError:
@@ -92,55 +100,135 @@ class EdgeTTSEngine:
             except Exception as ex:
                 print(f"⚠️ Erro no produtor dinâmico de TTS: {ex}")
             finally:
-                await fila_audio.put(None)  # Sinal de término da fila
+                await fila_audio.put(None)
 
-        try:
-            tarefa_produtor = asyncio.create_task(produtor())
-
-            if permitir_interrupcao:
-                chunk_check = int(16000 * 0.1)  # Chunks de 100ms
-                with sd.InputStream(samplerate=16000, channels=1, dtype='float32', blocksize=chunk_check) as mic_stream:
-                    while True:
-                        audio_buffer = await fila_audio.get()
-                        if audio_buffer is None:
-                            break
-
-                        pygame.mixer.music.load(audio_buffer)
-                        pygame.mixer.music.play()
-
-                        while pygame.mixer.music.get_busy():
-                            data, _ = await asyncio.to_thread(mic_stream.read, chunk_check)
-                            vol = float(np.sqrt(np.mean(data ** 2)))
-                            if vol > threshold_interrupcao:
-                                pygame.mixer.music.stop()
-                                interrompido = True
-                                chunks_voz.append(data.copy())
-                                break
-
-                        pygame.mixer.music.unload()
-
-                        if interrompido:
-                            break
-            else:
+        if not permitir_interrupcao:
+            try:
+                tarefa_produtor = asyncio.create_task(produtor())
                 while True:
                     audio_buffer = await fila_audio.get()
                     if audio_buffer is None:
                         break
-
                     pygame.mixer.music.load(audio_buffer)
                     pygame.mixer.music.play()
-
                     while pygame.mixer.music.get_busy():
-                        await asyncio.sleep(0.08)
-
+                        await asyncio.sleep(0.05)
                     pygame.mixer.music.unload()
+                return False, None
+            except Exception as e:
+                print(f"⚠️ Erro na reprodução de TTS: {e}")
+                return False, None
+            finally:
+                if tarefa_produtor and not tarefa_produtor.done():
+                    tarefa_produtor.cancel()
+                    try:
+                        await tarefa_produtor
+                    except asyncio.CancelledError:
+                        pass
 
-            return interrompido, (chunks_voz if interrompido else None)
+        # ----------------------------------------------------
+        # MODO COM SUPORTE A INTERRUPÇÃO INSTANTÂNEA (BARGE-IN)
+        # ----------------------------------------------------
+        chunks_interrupcao: List[np.ndarray] = []
+        voz_detectada = threading.Event()
+        parar_mic = threading.Event()
+
+        def monitor_microfone():
+            taxa = 16000
+            chunk_size = int(taxa * 0.08)  # Chunks de 80ms para resposta ultra rápida
+            pre_buffer: List[np.ndarray] = []
+            max_pre_buffer = 5  # 400ms de buffer pré-gatilho para não perder o início da fala
+            gravando_interrupcao = False
+            tempo_silencio = 0.0
+            tempo_gravado = 0.0
+
+            try:
+                with sd.InputStream(samplerate=taxa, channels=1, dtype='float32', blocksize=chunk_size) as mic_stream:
+                    while not parar_mic.is_set():
+                        data, _ = mic_stream.read(chunk_size)
+                        vol = float(np.sqrt(np.mean(data ** 2)))
+
+                        if volume_callback:
+                            volume_callback(vol)
+
+                        if not gravando_interrupcao:
+                            pre_buffer.append(data.copy())
+                            if len(pre_buffer) > max_pre_buffer:
+                                pre_buffer.pop(0)
+
+                            if vol > threshold_interrupcao:
+                                # Breca a reprodução do Pygame no mesmo instante
+                                pygame.mixer.music.stop()
+                                voz_detectada.set()
+                                gravando_interrupcao = True
+                                chunks_interrupcao.extend(pre_buffer)
+                        else:
+                            chunks_interrupcao.append(data.copy())
+                            tempo_gravado += 0.08
+                            if vol < threshold_interrupcao:
+                                tempo_silencio += 0.08
+                            else:
+                                tempo_silencio = 0.0
+
+                            if tempo_silencio >= 0.85 or tempo_gravado >= 25.0:
+                                break
+            except Exception as ex:
+                print(f"⚠️ Erro no monitor de microfone do TTS: {ex}")
+
+        mic_thread = threading.Thread(target=monitor_microfone, daemon=True)
+        mic_thread.start()
+
+        try:
+            tarefa_produtor = asyncio.create_task(produtor())
+
+            while not voz_detectada.is_set():
+                try:
+                    audio_buffer = await asyncio.wait_for(fila_audio.get(), timeout=0.08)
+                except asyncio.TimeoutError:
+                    if voz_detectada.is_set():
+                        break
+                    if tarefa_produtor.done() and fila_audio.empty():
+                        break
+                    continue
+
+                if audio_buffer is None or voz_detectada.is_set():
+                    break
+
+                pygame.mixer.music.load(audio_buffer)
+                pygame.mixer.music.play()
+
+                while pygame.mixer.music.get_busy():
+                    if voz_detectada.is_set():
+                        pygame.mixer.music.stop()
+                        break
+                    await asyncio.sleep(0.04)
+
+                pygame.mixer.music.unload()
+
+            if voz_detectada.is_set():
+                evento_parar_produtor.set()
+                if tarefa_produtor and not tarefa_produtor.done():
+                    tarefa_produtor.cancel()
+
+                # Aguarda o usuário concluir o comando falado
+                await asyncio.to_thread(mic_thread.join, timeout=10.0)
+
+                if chunks_interrupcao:
+                    audio_final = np.concatenate(chunks_interrupcao, axis=0).flatten().astype(np.float32)
+                    return True, audio_final
+                return True, None
+            else:
+                parar_mic.set()
+                await asyncio.to_thread(mic_thread.join, timeout=1.0)
+                return False, None
 
         except Exception as e:
-            print(f"⚠️ Erro na reprodução de TTS: {e}")
+            print(f"⚠️ Erro no loop de fala TTS: {e}")
+            parar_mic.set()
             return False, None
         finally:
+            parar_mic.set()
+            evento_parar_produtor.set()
             if tarefa_produtor and not tarefa_produtor.done():
                 tarefa_produtor.cancel()
                 try:
